@@ -22,7 +22,7 @@ dotnet add package TopGG
 - Built-in dependency injection support
 - Comprehensive error handling with RFC 7807 ProblemDetails
 - Rate limit handling with retry information
-- Supports .NET Standard 2.0+ (.NET Framework 4.6.1+, .NET Core 2.0+, .NET 5+)
+- Supports .NET Standard 2.0+ (.NET Framework 4.6.2+, .NET Core 2.0+, .NET 5+)
 - Cancellation token support
 
 ## Quick Start
@@ -30,15 +30,30 @@ dotnet add package TopGG
 ```csharp
 using TopGG.Client;
 
-// Create a client with your token and bot ID
+// Option 1: Direct instantiation
 using var client = new TopGGClient("your-topgg-token", botId: 123456789012345678);
 
-// Get a bot's information
-var bot = await client.GetBotAsync(123456789012345678);
-Console.WriteLine($"{bot.Username} has {bot.Points} votes!");
+// Option 2: Using the builder pattern
+var client = TopGGClientBuilder.Create()
+    .WithToken("your-topgg-token")
+    .WithBotId(123456789012345678)
+    .Build();
 
-// Post your bot's server count
-await client.PostBotStatsAsync(serverCount: 1500);
+// Option 3: From environment variables (recommended for production)
+var client = TopGGClientBuilder.Create()
+    .WithTokenFromEnvironment()  // Reads TOPGG_TOKEN
+    .WithBotIdFromEnvironment()  // Reads TOPGG_BOT_ID
+    .Build();
+
+// Search for bots
+var result = await client.SearchBotsAsync(limit: 5);
+foreach (var bot in result.Results)
+{
+    Console.WriteLine($"{bot.Username} has {bot.Points} votes!");
+}
+
+// Post your bot's guild count
+await client.PostBotStatsAsync(guildCount: 1500);
 
 // Check if a user has voted
 var voteCheck = await client.CheckUserVoteAsync(987654321012345678);
@@ -50,20 +65,30 @@ Console.WriteLine($"User has voted: {voteCheck.HasVoted}");
 ### Basic Usage
 
 ```csharp
+// Direct instantiation
 using var client = new TopGGClient("your-topgg-token", botId: 123456789012345678);
 
-// Get bot information
-var bot = await client.GetBotAsync(123456789012345678);
-Console.WriteLine($"Bot: {bot.Username}");
-Console.WriteLine($"Servers: {bot.ServerCount}");
-Console.WriteLine($"Votes: {bot.Points}");
+// Or using builder
+var client = TopGGClientBuilder.Create()
+    .WithToken("your-topgg-token")
+    .WithBotId(123456789012345678)
+    .Build();
 
-// Get bot stats
-var stats = await client.GetBotStatsAsync(123456789012345678);
+// Search for bots
+var bots = await client.SearchBotsAsync(limit: 10);
+foreach (var bot in bots.Results)
+{
+    Console.WriteLine($"Bot: {bot.Username}");
+    Console.WriteLine($"Servers: {bot.ServerCount}");
+    Console.WriteLine($"Votes: {bot.Points}");
+}
+
+// Get your bot's stats
+var stats = await client.GetBotStatsAsync();
 Console.WriteLine($"Server Count: {stats.ServerCount}");
 
-// Post bot stats
-await client.PostBotStatsAsync(serverCount: 1500);
+// Post your bot's stats
+await client.PostBotStatsAsync(guildCount: 1500);
 
 // Get last 1000 voters
 var votes = await client.GetBotVotesAsync();
@@ -180,11 +205,12 @@ using TopGG.Exceptions;
 
 try
 {
-    var bot = await client.GetBotAsync(123456789012345678);
+    var stats = await client.GetBotStatsAsync();
+    await client.PostBotStatsAsync(guildCount: 100);
 }
 catch (TopGGNotFoundException ex)
 {
-    // Bot not found (404)
+    // Resource not found (404)
     Console.WriteLine($"Not found: {ex.Message}");
 }
 catch (TopGGRateLimitException ex)
@@ -213,58 +239,157 @@ catch (TopGGException ex)
 
 ### Bot Endpoints (v0)
 
-| Method | Description |
-|--------|-------------|
-| `SearchBotsAsync(...)` | Search for bots on Top.gg |
-| `GetBotAsync(botId)` | Get a bot by Discord ID |
-| `GetBotStatsAsync(botId)` | Get bot statistics |
-| `PostBotStatsAsync(serverCount, ...)` | Post your bot's server count |
-| `GetBotVotesAsync()` | Get last 1000 voters for your bot |
-| `CheckUserVoteAsync(userId)` | Check if a user voted in last 12 hours |
-
-### User Endpoints (v0)
-
-| Method | Description |
-|--------|-------------|
-| `GetUserAsync(userId)` | Get a user by Discord ID |
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `SearchBotsAsync(limit?, offset?, sort?, fields?, cancellationToken?)` | `BotSearchResult` | Search for bots on Top.gg |
+| `GetBotStatsAsync(cancellationToken?)` | `BotStats` | Get **your** bot's statistics (requires bot ID in client) |
+| `PostBotStatsAsync(guildCount, cancellationToken?)` | `Task` | Post **your** bot's guild count |
+| `GetBotVotesAsync(cancellationToken?)` | `Vote[]` | Get last 1000 voters for **your** bot |
+| `CheckUserVoteAsync(userId, cancellationToken?)` | `VoteCheck` | Check if a user voted in last 12 hours |
 
 ### Project Endpoints (v1)
 
-| Method | Description |
-|--------|-------------|
-| `UpdateBotCommandsAsync(commands)` | Update slash commands on Top.gg |
-| `GetVoteStatusAsync(userId)` | Get detailed vote status for a user |
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `UpdateBotCommandsAsync(commands, cancellationToken?)` | `Task` | Update slash commands on Top.gg |
+| `GetVoteStatusAsync(userId, source?, cancellationToken?)` | `VoteStatus` | Get detailed vote status (timestamps, weight) |
 
 ### Fluent Search API
+
+The `Search()` method returns a `BotSearchBuilder` for constructing queries:
 
 | Method | Description |
 |--------|-------------|
 | `Search()` | Create a search builder |
-| `.WithLimit(n)` | Set max results (max 500) |
-| `.WithOffset(n)` | Skip n results |
-| `.SortBy(field)` | Sort by field (use `*Desc` for descending) |
-| `.WithFields(...)` | Select specific fields |
-| `.ExecuteAsync()` | Execute the search |
+| `.WithLimit(n)` | Set max results (max 500, default 50) |
+| `.WithOffset(n)` | Skip n results (for pagination) |
+| `.SortBy(field)` | Sort by field (use `*Desc` variants for descending) |
+| `.WithFields(params string[])` | Select specific fields to return |
+| `.IncludeField(field)` | Add a single field to the selection |
+| `.ExecuteAsync(cancellationToken?)` | Execute the search and return results |
 
-### Sort Fields
+### Sort Fields (BotSortField enum)
 
-- `Username` / `UsernameDesc`
-- `Id` / `IdDesc`
-- `ServerCount` / `ServerCountDesc`
-- `Points` / `PointsDesc`
-- `MonthlyPoints` / `MonthlyPointsDesc`
-- `Date` / `DateDesc`
+Available sort fields for the `SortBy()` method:
+
+- `Username` / `UsernameDesc` - Sort by bot username
+- `Id` / `IdDesc` - Sort by bot ID
+- `ServerCount` / `ServerCountDesc` - Sort by server count
+- `Points` / `PointsDesc` - Sort by total votes
+- `MonthlyPoints` / `MonthlyPointsDesc` - Sort by monthly votes
+- `Date` / `DateDesc` - Sort by submission date
+
+### Response Models
+
+**Bot** - Returned from search results
+```csharp
+public class Bot
+{
+    public ulong Id { get; set; }
+    public string Username { get; set; }
+    public int Points { get; set; }           // Total votes
+    public int MonthlyPoints { get; set; }   // Monthly votes
+    public int? ServerCount { get; set; }
+    public string? Prefix { get; set; }
+    public string? ShortDescription { get; set; }
+    public List<string>? Tags { get; set; }
+    public string? Website { get; set; }
+    public string? Invite { get; set; }
+    // ... and more properties
+}
+```
+
+**BotStats** - Your bot's statistics
+```csharp
+public class BotStats
+{
+    public int? ServerCount { get; set; }
+}
+```
+
+**Vote** - A vote from GetBotVotesAsync()
+```csharp
+public class Vote
+{
+    public ulong Id { get; set; }
+    public string Username { get; set; }
+    public string? Avatar { get; set; }
+}
+```
+
+**VoteCheck** - Result from CheckUserVoteAsync()
+```csharp
+public class VoteCheck
+{
+    public int Voted { get; set; }
+    public bool HasVoted { get; }  // Computed property (true if Voted == 1)
+}
+```
+
+**VoteStatus** - Detailed vote info from GetVoteStatusAsync()
+```csharp
+public class VoteStatus
+{
+    public DateTime CreatedAt { get; set; }   // When user last voted
+    public DateTime ExpiresAt { get; set; }   // When user can vote again
+    public int Weight { get; set; }           // Vote multiplier
+}
+```
 
 ## Configuration
 
+### Builder Pattern
+
+The `TopGGClientBuilder` provides a fluent API for creating clients:
+
+```csharp
+var client = TopGGClientBuilder.Create()
+    .WithToken("your-token")
+    .WithBotId(123456789012345678)
+    .Build();
+```
+
 ### Environment Variables
 
-For the example projects and CI, you can set:
+The builder supports loading configuration from environment variables:
+
+```csharp
+// Uses default variable names: TOPGG_TOKEN and TOPGG_BOT_ID
+var client = TopGGClientBuilder.Create()
+    .WithTokenFromEnvironment()
+    .WithBotIdFromEnvironment()
+    .Build();
+
+// Or use custom environment variable names
+var client = TopGGClientBuilder.Create()
+    .WithTokenFromEnvironment("MY_CUSTOM_TOKEN")
+    .WithBotIdFromEnvironment("MY_CUSTOM_BOT_ID")
+    .Build();
+```
+
+**Default environment variables:**
 
 | Variable | Description |
 |----------|-------------|
 | `TOPGG_TOKEN` | Your Top.gg API token |
 | `TOPGG_BOT_ID` | Your bot's Discord ID |
+
+### Safe Builder with TryBuild
+
+```csharp
+var builder = TopGGClientBuilder.Create()
+    .WithTokenFromEnvironment()
+    .WithBotIdFromEnvironment();
+
+if (builder.TryBuild(out var client))
+{
+    // Client created successfully
+    await client.PostBotStatsAsync(100);
+}
+else
+{
+    Console.WriteLine("Failed to create client - check your configuration");
+}
 
 ## License
 
