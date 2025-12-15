@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    strategy:
+      matrix:
+        include:
+          # .NET Framework versions on Windows
+          - os: windows-latest
+            dotnet-version: '9.0.x'
+            framework: net462
+            display-name: '.NET Framework 4.6.2'
+
+          - os: windows-latest
+            dotnet-version: '9.0.x'
+            framework: net472
+            display-name: '.NET Framework 4.7.2'
+
+          - os: windows-latest
+            dotnet-version: '9.0.x'
+            framework: net481
+            display-name: '.NET Framework 4.8.1'
+
+          # Modern .NET versions on Linux
+          - os: ubuntu-latest
+            dotnet-version: '8.0.x'
+            framework: net8.0
+            display-name: '.NET 8.0'
+
+          - os: ubuntu-latest
+            dotnet-version: '9.0.x'
+            framework: net9.0
+            display-name: '.NET 9.0'
+
+          - os: ubuntu-latest
+            dotnet-version: '10.0.x'
+            framework: net10.0
+            display-name: '.NET 10.0'
+
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+    name: Build and Test (${{ matrix.display-name }})
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          ${{ matrix.dotnet-version }}
+          10.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build library (netstandard2.0)
+      run: dotnet build TopGG/TopGG.csproj --no-restore --configuration Release
+
+    - name: Build examples (${{ matrix.framework }})
+      run: |
+        dotnet build TopGG.Example/TopGG.Example.csproj --no-restore --configuration Release --framework ${{ matrix.framework }}
+        dotnet build TopGG.Example.DI/TopGG.Example.DI.csproj --no-restore --configuration Release --framework ${{ matrix.framework }}
+
+    - name: Run examples (${{ matrix.framework }})
+      if: (matrix.framework == 'net481' || matrix.framework == 'net10.0') && env.TOPGG_TOKEN != ''
+      run: |
+        dotnet run --project TopGG.Example/TopGG.Example.csproj --no-build --configuration Release --framework ${{ matrix.framework }}
+        dotnet run --project TopGG.Example.DI/TopGG.Example.DI.csproj --no-build --configuration Release --framework ${{ matrix.framework }}
+      env:
+        CI: true
+        TOPGG_TOKEN: ${{ secrets.TOPGG_TOKEN }}
+        TOPGG_BOT_ID: ${{ secrets.TOPGG_BOT_ID }}
+
+    - name: Run tests (net10.0)
+      if: matrix.framework == 'net10.0'
+      run: dotnet test TopGG.Tests/TopGG.Tests.csproj --no-restore --configuration Release --verbosity normal
